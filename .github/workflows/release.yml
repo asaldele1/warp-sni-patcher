@@ -52,11 +52,16 @@ jobs:
           echo "Build verified: $bin ($size bytes)"
           test "$size" -ge 10000 || { echo "Generated executable is suspiciously small ($size bytes)."; exit 1; }
 
-      - name: Upload Linux binary
+      - name: Package Linux binary
+        run: |
+          chmod +x linux/warp-sni-patcher
+          tar -C linux -czf warp-sni-patcher-linux-x86_64.tar.gz warp-sni-patcher
+
+      - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: warp-sni-patcher-linux
-          path: linux/warp-sni-patcher
+          path: warp-sni-patcher-linux-x86_64.tar.gz
           if-no-files-found: error
 
   release:
@@ -159,23 +164,24 @@ jobs:
           Write-Host "Created archive: $zipName containing only warp-sni-patcher.exe"
           "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Download Linux binary
+      - name: Download Linux package
         if: steps.check_version.outputs.should_release == 'True' || steps.check_version.outputs.should_release == 'true'
         uses: actions/download-artifact@v4
         with:
           name: warp-sni-patcher-linux
           path: linux-dist
 
-      - name: Create Linux release package
+      - name: Name Linux release package
         if: steps.check_version.outputs.should_release == 'True' || steps.check_version.outputs.should_release == 'true'
         id: pkg_linux
         shell: pwsh
         run: |
           $tag = "${{ steps.check_version.outputs.tag }}"
           $tarName = "warp-sni-patcher-$tag-linux-x86_64.tar.gz"
-          # Preserve the executable bit inside the tarball.
-          tar -C linux-dist --mode='0755' -czf $tarName warp-sni-patcher
-          Write-Host "Created archive: $tarName"
+          # The tarball was built on Linux (exec bit preserved); just rename it
+          # to carry the tag -- do not re-pack it here (Windows tar is bsdtar).
+          Move-Item "linux-dist/warp-sni-patcher-linux-x86_64.tar.gz" $tarName -Force
+          Write-Host "Prepared archive: $tarName"
           "tar_name=$tarName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Extract Release Notes from CHANGELOG.md
