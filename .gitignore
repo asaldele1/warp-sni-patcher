@@ -1,2 +1,5 @@
 *.exe
 *.exe.*
+# Linux build
+linux/warp-sni-patcher
+linux/*.o

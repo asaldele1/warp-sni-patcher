@@ -1,26 +1,69 @@
 # WARP SNI Patcher
 
-A small tool that patches Cloudflare WARP's `warp-svc.exe` on disk to override the MASQUE tunnel SNI and the registration API hostname.
+A small tool that patches Cloudflare WARP's `warp-svc` on disk to override the
+MASQUE tunnel SNI and the registration API hostname.
+
+Two builds are provided:
+
+- **Windows** — a Win32 GUI, patches `warp-svc.exe` (PE). Sources at the repo root.
+- **Linux** — a CLI, patches `warp-svc` (ELF). Sources in [`linux/`](linux/).
+
+> This is a fork of [Sketchystan1/warp-sni-patcher](https://github.com/Sketchystan1/warp-sni-patcher)
+> that adds the Linux port.
 
 ## How it works
 
-The patcher parses `warp-svc.exe` as a PE image, and for each known hostname it:
+For each known hostname baked into `warp-svc`, the patcher overwrites the
+hostname string in place (keeping its address) and fixes every associated
+length value so the runtime reads the new host correctly:
 
-1. Overwrites the hostname string in place with the new value (same address, so no pointer repointing needed).
-2. Fixes the associated length values — fat-pointer length fields in data, `mov r32, imm32` immediates near the `lea` that loads the hostname, and (registration host only) the parallel ptr/len arrays `warp-svc` indexes at runtime.
+- `mov r32, imm32` length immediates in code, near the `lea` that loads the host;
+- fat-pointer length fields in data;
+- for the registration host, the parallel pointer/length arrays the service
+  indexes at runtime.
 
-MASQUE hostnames are packed string-table literals, so the replacement must fit the original length; the tail is left untouched (Rust `&str` is `(ptr, len)` with no NUL terminator, so the patched length bounds every read). Registration hosts sit in fixed 32-byte slots, so the replacement may be longer, up to the slot capacity.
+MASQUE hostnames are packed Rust string-table literals (`&str` is `(ptr, len)`
+with no NUL terminator), so a replacement must fit the original length and the
+tail is left untouched — the patched length bounds every read.
 
-The original binary is preserved as `<target>.bak`, refreshed whenever the target is still pristine, so re-running after a WARP update stays clean. Patching breaks the Authenticode signature.
+The two platforms differ mainly in the binary format and in how the
+registration host is handled:
+
+| | Windows (`warp-svc.exe`, PE) | Linux (`warp-svc`, ELF PIE) |
+|---|---|---|
+| Hostname pointers | absolute values in data | `R_X86_64_RELATIVE` relocations |
+| Registration host storage | fixed 32-byte slots (can grow) | packed literals (can't grow) |
+| Registration patch strategy | overwrite, up to slot capacity | overwrite in place, **or** repoint to an FQDN already in the binary |
+| Front end | Win32 GUI | CLI |
+
+The original binary is preserved as `<target>.bak`, refreshed whenever the
+target is still pristine, so re-running after a WARP update stays clean.
+Patching breaks the binary's signature, and WARP updates replace the binary, so
+re-run the patcher after each update.
 
 ## Releases
 
-Pre-built release packages (`.zip`) are available on the [Releases](https://github.com/Sketchystan1/warp-sni-patcher/releases) page. See [CHANGELOG.md](CHANGELOG.md) for details on each release.
+Pre-built release packages (`.zip`) are available on the
+[Releases](../../releases) page. See [CHANGELOG.md](CHANGELOG.md) for details on
+each release.
 
 ## Building from source
 
-Requires Visual Studio with C++ desktop development tools (MSVC x64). Run:
+### Windows
+
+Requires Visual Studio with C++ desktop development tools (MSVC x64):
 
 ```cmd
 build.bat
 ```
+
+### Linux
+
+Requires a C compiler and glibc headers (no external dependencies):
+
+```sh
+cd linux
+make
+```
+
+See [`linux/README.md`](linux/README.md) for usage and details.

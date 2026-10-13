@@ -34,9 +34,35 @@ permissions:
   contents: write
 
 jobs:
+  build-linux:
+    name: Build Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build warp-sni-patcher (Linux)
+        run: make -C linux
+
+      - name: Verify build artifact
+        run: |
+          bin=linux/warp-sni-patcher
+          test -x "$bin" || { echo "Expected build artifact '$bin' was not found!"; exit 1; }
+          size=$(stat -c%s "$bin")
+          echo "Build verified: $bin ($size bytes)"
+          test "$size" -ge 10000 || { echo "Generated executable is suspiciously small ($size bytes)."; exit 1; }
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: warp-sni-patcher-linux
+          path: linux/warp-sni-patcher
+          if-no-files-found: error
+
   release:
     name: Build & Auto-Release
     runs-on: windows-latest
+    needs: build-linux
 
     steps:
       - name: Checkout repository
@@ -133,6 +159,25 @@ jobs:
           Write-Host "Created archive: $zipName containing only warp-sni-patcher.exe"
           "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Download Linux binary
+        if: steps.check_version.outputs.should_release == 'True' || steps.check_version.outputs.should_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: warp-sni-patcher-linux
+          path: linux-dist
+
+      - name: Create Linux release package
+        if: steps.check_version.outputs.should_release == 'True' || steps.check_version.outputs.should_release == 'true'
+        id: pkg_linux
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.check_version.outputs.tag }}"
+          $tarName = "warp-sni-patcher-$tag-linux-x86_64.tar.gz"
+          # Preserve the executable bit inside the tarball.
+          tar -C linux-dist --mode='0755' -czf $tarName warp-sni-patcher
+          Write-Host "Created archive: $tarName"
+          "tar_name=$tarName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Extract Release Notes from CHANGELOG.md
         if: steps.check_version.outputs.should_release == 'True' || steps.check_version.outputs.should_release == 'true'
         shell: pwsh
@@ -179,6 +224,8 @@ jobs:
           generate_release_notes: true
           draft: ${{ inputs.draft || false }}
           prerelease: ${{ steps.check_version.outputs.is_prerelease == 'True' || steps.check_version.outputs.is_prerelease == 'true' }}
-          files: ${{ steps.pkg.outputs.zip_name }}
+          files: |
+            ${{ steps.pkg.outputs.zip_name }}
+            ${{ steps.pkg_linux.outputs.tar_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
