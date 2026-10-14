@@ -106,6 +106,11 @@ typedef struct {
     /* .rela.dyn */
     Elf64_Rela* rela;
     size_t relaCount;
+    /* Code cave: a zero-filled, non-writable gap used to store oversized
+       hostnames. Allocated lazily on first use. */
+    int caveInit;
+    unsigned long long caveCursor;   /* next VA to hand out (0 if none) */
+    unsigned long long caveEnd;      /* one past the last usable VA */
 } ELF_VIEW;
 
 /* ---- File I/O ---- */
@@ -323,6 +328,133 @@ static int OffsetIsExecutable(const ELF_VIEW* v, size_t off)
         }
     }
     return 0;
+}
+
+/* Return 1 if va lies in a loaded, readable, NON-writable segment (safe to
+   store a string the runtime only reads, and never clobbered by RELRO). */
+static int VaInReadOnlyLoad(const ELF_VIEW* v, unsigned long long va)
+{
+    Elf64_Half i;
+    for (i = 0; i < v->phnum; ++i)
+    {
+        const Elf64_Phdr* p = &v->ph[i];
+        if (p->p_type == PT_LOAD && p->p_filesz > 0 &&
+            va >= p->p_vaddr && va < p->p_vaddr + p->p_filesz)
+        {
+            return (p->p_flags & PF_W) == 0;
+        }
+    }
+    return 0;
+}
+
+/* ---- Code cave ----
+   Find the largest zero-filled gap between two sections that sits in a
+   read-only loaded segment (i.e. inter-section alignment padding -- unused and
+   never referenced). Such a gap is a safe place to store an oversized hostname
+   whose pointer we then repoint to it. */
+static void FindCave(ELF_VIEW* v)
+{
+    Elf64_Half i, j;
+    unsigned long long bestStart = 0;
+    size_t bestLen = 0;
+
+    for (i = 0; i < v->shnum; ++i)
+    {
+        const Elf64_Shdr* a = &v->sh[i];
+        unsigned long long gapStart;
+        unsigned long long nextAddr = 0;
+        size_t gapLen, goff, k;
+        int zero = 1;
+
+        if (a->sh_type == SHT_NOBITS || a->sh_addr == 0 || a->sh_size == 0)
+        {
+            continue;
+        }
+        gapStart = a->sh_addr + a->sh_size;
+
+        /* Nearest section that starts after this gap. */
+        for (j = 0; j < v->shnum; ++j)
+        {
+            const Elf64_Shdr* b = &v->sh[j];
+            if (b->sh_addr > gapStart && (nextAddr == 0 || b->sh_addr < nextAddr))
+            {
+                nextAddr = b->sh_addr;
+            }
+        }
+        if (nextAddr == 0 || nextAddr <= gapStart)
+        {
+            continue;
+        }
+        gapLen = (size_t)(nextAddr - gapStart);
+        if (gapLen < 8 || !VaInReadOnlyLoad(v, gapStart))
+        {
+            continue;
+        }
+        if (!VaToOff(v, gapStart, &goff) || goff + gapLen > v->size)
+        {
+            continue;
+        }
+        for (k = 0; k < gapLen; ++k)
+        {
+            if (v->base[goff + k] != 0)
+            {
+                zero = 0;
+                break;
+            }
+        }
+        if (zero && gapLen > bestLen)
+        {
+            bestLen = gapLen;
+            bestStart = gapStart;
+        }
+    }
+
+    if (bestLen >= 8)
+    {
+        unsigned long long aligned = (bestStart + 7) & ~7ULL;
+        if (aligned < bestStart + bestLen)
+        {
+            v->caveCursor = aligned;
+            v->caveEnd = bestStart + bestLen;
+        }
+    }
+}
+
+/* Reserve `bytes` from the cave (8-byte aligned). Returns the VA and sets
+   *outOff to its file offset, or 0 if there is no room. */
+static unsigned long long CaveAlloc(ELF_VIEW* v, size_t bytes, size_t* outOff)
+{
+    unsigned long long va;
+    size_t need = (bytes + 7) & ~(size_t)7;
+
+    if (!v->caveInit)
+    {
+        FindCave(v);
+        v->caveInit = 1;
+    }
+    if (v->caveCursor == 0 || need == 0 || v->caveCursor + need > v->caveEnd)
+    {
+        return 0;
+    }
+    va = v->caveCursor;
+    if (!VaToOff(v, va, outOff))
+    {
+        return 0;
+    }
+    v->caveCursor += need;
+    return va;
+}
+
+/* Write a string into the cave and return the VA it was stored at (0 if full). */
+static unsigned long long CaveStoreString(ELF_VIEW* v, const char* s, size_t len)
+{
+    size_t off;
+    unsigned long long va = CaveAlloc(v, len, &off);
+    if (va)
+    {
+        memcpy(v->base + off, s, len);
+    }
+    return va;
 }
 
 /* ---- Hostname discovery ---- */
@@ -955,29 +1087,15 @@ int RunPatch(const char* target, const char* newSni, const char* newRegSni)
     OCCURRENCE masque[MAX_OCCURRENCES], reg[MAX_OCCURRENCES];
     size_t masqueCount, regCount;
     size_t newLen, regLenPlain;
-    size_t minMasqueLen = (size_t)-1;
+    unsigned long long caveSniVa = 0;
     size_t i;
 
     newLen = strlen(newSni);
     regLenPlain = strlen(newRegSni);
-    for (i = 0; i < MASQUE_HOSTNAME_COUNT; ++i)
-    {
-        if (g_MasqueHostnames[i].patchTarget &&
-            g_MasqueHostnames[i].length < minMasqueLen)
-        {
-            minMasqueLen = g_MasqueHostnames[i].length;
-        }
-    }
 
     if (newLen == 0)
     {
         UiLog(Tr(STR_LOG_ERR_EMPTY_SNI), DEFAULT_SNI);
-        return 0;
-    }
-    if (newLen > minMasqueLen)
-    {
-        UiLog(Tr(STR_LOG_ERR_SNI_TOO_LONG), newSni, newLen, minMasqueLen);
-        UiLog(Tr(STR_LOG_TIP_DEFAULT_SNI), DEFAULT_SNI);
         return 0;
     }
     if (regLenPlain == 0)
@@ -1011,18 +1129,41 @@ int RunPatch(const char* target, const char* newSni, const char* newRegSni)
 
     UiLog("%s", Tr(STR_LOG_PATCHING));
 
-    /* ---- MASQUE: overwrite in place + fix code immediates ---- */
+    /* ---- MASQUE: overwrite in place when it fits, else relocate to a cave ---- */
     for (i = 0; i < masqueCount; ++i)
     {
+        size_t origLen;
         if (!masque[i].known->patchTarget)
         {
             continue;
         }
-        UiLog(Tr(STR_LOG_PATCH_MASQUE), masque[i].known->value, newSni,
-              masque[i].originalLength, newLen);
-        OverwriteHostname(&view, &masque[i], newSni, newLen);
-        PatchCodeForHost(&view, masque[i].va, masque[i].originalLength, newLen, 0);
-        PatchRelocsForHost(&view, masque[i].va, masque[i].originalLength, newLen, 0);
+        origLen = masque[i].originalLength;
+
+        if (newLen <= origLen)
+        {
+            UiLog(Tr(STR_LOG_PATCH_MASQUE), masque[i].known->value, newSni,
+                  origLen, newLen);
+            OverwriteHostname(&view, &masque[i], newSni, newLen);
+            PatchCodeForHost(&view, masque[i].va, origLen, newLen, 0);
+            PatchRelocsForHost(&view, masque[i].va, origLen, newLen, 0);
+        }
+        else
+        {
+            if (!caveSniVa)
+            {
+                caveSniVa = CaveStoreString(&view, newSni, newLen);
+            }
+            if (!caveSniVa)
+            {
+                UiLog(Tr(STR_LOG_ERR_NO_CAVE), newSni, newLen);
+                free(source);
+                return 0;
+            }
+            UiLog(Tr(STR_LOG_PATCH_MASQUE_CAVE), masque[i].known->value, newSni,
+                  origLen, newLen);
+            PatchCodeForHost(&view, masque[i].va, origLen, newLen, caveSniVa);
+            PatchRelocsForHost(&view, masque[i].va, origLen, newLen, caveSniVa);
+        }
     }
 
     /* ---- Registration: in-place when it fits, else repoint ---- */
@@ -1080,11 +1221,21 @@ int RunPatch(const char* target, const char* newSni, const char* newRegSni)
             }
             else
             {
-                UiLog(Tr(STR_LOG_ERR_REG_HOSTNAME_TOO_LONG),
-                      newRegSni, regLenPlain, origLen);
-                UiLog(Tr(STR_LOG_TIP_DEFAULT_REG_SNI), DEFAULT_REG_SNI);
-                free(source);
-                return 0;
+                /* Too long and not already in the binary: store the FQDN in a
+                   code cave and repoint every reference to it. */
+                unsigned long long caveVa =
+                    CaveStoreString(&view, dotted, regLenDotted);
+                if (!caveVa)
+                {
+                    UiLog(Tr(STR_LOG_ERR_NO_CAVE), newRegSni, regLenDotted);
+                    free(source);
+                    return 0;
+                }
+                UiLog(Tr(STR_LOG_PATCH_REG_CAVE), reg[i].known->value, dotted,
+                      origLen, regLenDotted);
+                PatchCodeForHost(&view, reg[i].va, origLen, regLenDotted, caveVa);
+                PatchRelocsForHost(&view, reg[i].va, origLen, regLenDotted, caveVa);
+                PatchRegLengthArray(&view, origLen, regLenDotted);
             }
         }
     }

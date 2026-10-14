@@ -33,7 +33,7 @@ registration host is handled:
 |---|---|---|
 | Hostname pointers | absolute values in data | `R_X86_64_RELATIVE` relocations |
 | Registration host storage | fixed 32-byte slots (can grow) | packed literals (can't grow) |
-| Registration patch strategy | overwrite, up to slot capacity | overwrite in place, **or** repoint to an FQDN already in the binary |
+| Registration patch strategy | overwrite, up to slot capacity | overwrite in place, repoint to an FQDN already in the binary, **or** relocate into a code cave (no length limit) |
 | Front end | Win32 GUI | CLI |
 
 The original binary is preserved as `<target>.bak`, refreshed whenever the
@@ -63,7 +63,9 @@ Requires a C compiler and glibc headers (no external dependencies):
 
 ```sh
 cd linux
-make
+make              # local build
+make STATIC=1     # fully static, portable across distros / libc versions
 ```
 
-See [`linux/README.md`](linux/README.md) for usage and details.
+Release binaries are built static, so they run on any x86-64 Linux regardless
+of glibc version. See [`linux/README.md`](linux/README.md) for usage and details.

@@ -34,6 +34,11 @@ Because registration hosts can't grow in place, the patcher does both:
   the binary (e.g. `api.devices.cloudflare.com`, present as an anchor): the
   consumer endpoint's pointer/length references are retargeted to that existing
   string. This is how the default `api.devices.cloudflare.com` is applied.
+- **Code cave** when it is longer than the original *and* not already in the
+  binary: the FQDN is written into unused inter-section padding (a zero-filled,
+  read-only gap) and every reference repointed there. This lifts the length
+  limit — an arbitrary custom hostname works for both the MASQUE SNI and the
+  registration host, bounded only by the size of the padding gap.
 
 The original is preserved as `<target>.bak`, refreshed whenever the target is
 still pristine, so re-running after a WARP update stays clean. Patching does not
@@ -44,10 +49,15 @@ so re-run after each update.
 
 ```sh
 cd linux
-make
+make                # dynamically linked (for local use)
+make STATIC=1       # fully static, portable across distros / libc versions
 ```
 
 Needs a C compiler and glibc headers (`<elf.h>`, `memmem`). No external deps.
+`STATIC=1` also needs the static libc archive (`libc.a`, from `glibc-static` /
+`libc6-dev`). The CI and release binaries are built with `STATIC=1`, so a
+released binary runs on any x86-64 Linux regardless of its glibc version (e.g.
+glibc 2.33+).
 
 ## Usage
 

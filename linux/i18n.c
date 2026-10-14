@@ -51,12 +51,18 @@ static const I18N_ENTRY g_table[STR_COUNT] = {
     ENTRY(STR_LOG_PATCH_MASQUE,
         "  MASQUE %-42s -> %s (len %zu->%zu)",
         "  MASQUE %-42s -> %s (длина %zu->%zu)"),
+    ENTRY(STR_LOG_PATCH_MASQUE_CAVE,
+        "  MASQUE %-42s -> %s (cave, len %zu->%zu)",
+        "  MASQUE %-42s -> %s (пещера, длина %zu->%zu)"),
     ENTRY(STR_LOG_PATCH_REG_INPLACE,
         "  reg    %-42s -> %s (in-place, len %zu->%zu)",
         "  reg    %-42s -> %s (на месте, длина %zu->%zu)"),
     ENTRY(STR_LOG_PATCH_REG_REPOINT,
         "  reg    %-42s -> %s (repoint, len %zu->%zu)",
         "  reg    %-42s -> %s (repoint, длина %zu->%zu)"),
+    ENTRY(STR_LOG_PATCH_REG_CAVE,
+        "  reg    %-42s -> %s (cave, len %zu->%zu)",
+        "  reg    %-42s -> %s (пещера, длина %zu->%zu)"),
 
     ENTRY(STR_LOG_ERR_STOP_SERVICE,
         "[!] Could not stop the warp-svc service. Are you root?",
@@ -147,6 +153,11 @@ static const I18N_ENTRY g_table[STR_COUNT] = {
     ENTRY(STR_LOG_ERR_REG_UPDATE_UNSAFE,
         "[!] Could not safely update the registration hostname in this build.",
         "[!] Не удалось безопасно обновить имя хоста регистрации в этой сборке."),
+    ENTRY(STR_LOG_ERR_NO_CAVE,
+        "[!] '%s' (%zu) does not fit in place and no free space (cave) large\n"
+        "    enough was found in the binary to relocate it.",
+        "[!] '%s' (%zu) не помещается на месте, и в бинарнике не нашлось\n"
+        "    свободного места (пещеры) достаточного размера для переноса."),
 };
 
 static int g_isRussian = 0;

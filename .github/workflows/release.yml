@@ -41,8 +41,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build warp-sni-patcher (Linux)
-        run: make -C linux
+      - name: Build warp-sni-patcher (Linux, static)
+        run: make -C linux STATIC=1
 
       - name: Verify build artifact
         run: |
@@ -51,6 +51,13 @@ jobs:
           size=$(stat -c%s "$bin")
           echo "Build verified: $bin ($size bytes)"
           test "$size" -ge 10000 || { echo "Generated executable is suspiciously small ($size bytes)."; exit 1; }
+          # Must be fully static so it runs on older libc (e.g. glibc 2.33+).
+          if ! file "$bin" | grep -q 'statically linked'; then
+            echo "Binary is not statically linked!"; file "$bin"; exit 1
+          fi
+          if readelf -d "$bin" 2>/dev/null | grep -q NEEDED; then
+            echo "Binary has dynamic dependencies!"; exit 1
+          fi
 
       - name: Package Linux binary
         run: |
